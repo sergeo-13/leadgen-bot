@@ -126,6 +126,59 @@ def test_search_documents_success(client):
         mock_db.assert_called_once()
 
 
+def test_search_documents_filters_null(client):
+    """Test successful semantic search when filters is null/omitted."""
+    payload = {
+        "query": "What is the role of OpenClaw in the leadgen architecture?",
+        "limit": 3
+    }
+
+    mock_db_result = [
+        {
+            "document_id": "doc-uuid-1",
+            "title": "Expanded Leadgen PRD",
+            "type": "case",
+            "client_name": "Acme",
+            "industry": "Tech",
+            "geography": "Global",
+            "use_case": "Integration",
+            "tags": ["Parsing"],
+            "authors": ["Sergii Poznokos"],
+            "source_bucket": "leadgen-docs",
+            "source_object_key": "leadgen_prd_expanded.pdf",
+            "chunk_id": "chunk-uuid-1",
+            "chunk_index": 0,
+            "content": "Matched chunk content about OpenClaw role.",
+            "score": 0.87
+        }
+    ]
+
+    with patch("src.api.v1.documents.generate_embeddings") as mock_embed, \
+         patch("src.api.v1.documents.search_document_chunks", new_callable=AsyncMock) as mock_db:
+
+        mock_embed.return_value = [[0.1] * 1536]
+        mock_db.return_value = mock_db_result
+
+        response = client.post("/api/v1/documents/search", json=payload)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["query"] == "What is the role of OpenClaw in the leadgen architecture?"
+        assert len(data["results"]) == 1
+        assert data["results"][0]["document_id"] == "doc-uuid-1"
+        assert data["results"][0]["title"] == "Expanded Leadgen PRD"
+        assert data["results"][0]["score"] == 0.87
+        assert data["results"][0]["authors"] == ["Sergii Poznokos"]
+
+        mock_embed.assert_called_once_with(["What is the role of OpenClaw in the leadgen architecture?"])
+        mock_db.assert_called_once_with(
+            query_embedding=[0.1] * 1536,
+            limit=3,
+            filters=None,
+            query_text="What is the role of OpenClaw in the leadgen architecture?"
+        )
+
+
 def test_search_documents_empty_query(client):
     """Test search fails on empty or whitespace-only query."""
     payload = {

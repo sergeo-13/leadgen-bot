@@ -314,7 +314,8 @@ async def insert_document_chunks(document_id: str, chunks: List[Tuple[int, str, 
 async def search_document_chunks(
     query_embedding: List[float],
     limit: int,
-    filters: Optional[DocumentSearchFilters] = None
+    filters: Optional[DocumentSearchFilters] = None,
+    query_text: Optional[str] = None
 ) -> List[dict]:
     """
     Search document chunks by vector similarity using pgvector cosine distance,
@@ -324,10 +325,17 @@ async def search_document_chunks(
         query_embedding: OpenAI embedding float list.
         limit: Max number of chunks to return.
         filters: DocumentSearchFilters object.
+        query_text: Optional search query text for debugging.
 
     Returns:
         List[dict]: Matched document chunks with similarity score and doc metadata.
     """
+    logger.info("Starting search_document_chunks execution.")
+    logger.debug(f"Search Query Text: {query_text}")
+    logger.debug(f"Limit: {limit}")
+    logger.debug(f"Filters: {filters}")
+    logger.debug(f"Query Embedding Dimensions: {len(query_embedding)}")
+
     conn = await asyncpg.connect(
         host=settings.POSTGRES_HOST,
         port=settings.POSTGRES_PORT,
@@ -365,30 +373,32 @@ async def search_document_chunks(
     param_idx = 2
 
     if filters:
-        if filters.type is not None:
+        if filters.type and filters.type.strip():
             where_clauses.append(f"d.type = ${param_idx}")
             params.append(filters.type)
             param_idx += 1
-        if filters.client_name is not None:
+        if filters.client_name and filters.client_name.strip():
             where_clauses.append(f"d.client_name = ${param_idx}")
             params.append(filters.client_name)
             param_idx += 1
-        if filters.industry is not None:
+        if filters.industry and filters.industry.strip():
             where_clauses.append(f"d.industry = ${param_idx}")
             params.append(filters.industry)
             param_idx += 1
-        if filters.geography is not None:
+        if filters.geography and filters.geography.strip():
             where_clauses.append(f"d.geography = ${param_idx}")
             params.append(filters.geography)
             param_idx += 1
-        if filters.use_case is not None:
+        if filters.use_case and filters.use_case.strip():
             where_clauses.append(f"d.use_case = ${param_idx}")
             params.append(filters.use_case)
             param_idx += 1
         if filters.tags:
-            where_clauses.append(f"d.tags && ${param_idx}::text[]")
-            params.append(filters.tags)
-            param_idx += 1
+            non_empty_tags = [t.strip() for t in filters.tags if t and t.strip()]
+            if non_empty_tags:
+                where_clauses.append(f"d.tags && ${param_idx}::text[]")
+                params.append(non_empty_tags)
+                param_idx += 1
 
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
@@ -396,13 +406,18 @@ async def search_document_chunks(
     query += f" ORDER BY c.embedding <=> $1::vector ASC LIMIT ${param_idx}"
     params.append(limit)
 
+    logger.debug(f"Final SQL Query: {query}")
+    logger.debug(f"Query parameters: {params}")
+
     try:
         rows = await conn.fetch(query, *params)
+        logger.info(f"Database returned {len(rows)} matching chunks.")
         results = []
         for row in rows:
             res = dict(row)
             res["document_id"] = str(res["document_id"])
             res["chunk_id"] = str(res["chunk_id"])
+            res["tags"] = list(res["tags"]) if res.get("tags") is not None else []
             res["authors"] = list(res["authors"]) if res.get("authors") is not None else []
             results.append(res)
         return results

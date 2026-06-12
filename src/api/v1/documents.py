@@ -259,6 +259,7 @@ async def search_documents(payload: DocumentSearchRequest):
             query_embedding=query_embedding,
             limit=payload.limit,
             filters=payload.filters,
+            query_text=payload.query,
         )
 
         results = [DocumentSearchResult(**item) for item in results_data]
