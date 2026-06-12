@@ -4,7 +4,9 @@ import logging
 
 from src.services.chunker import split_text
 from src.services.database import (
+    claim_job,
     get_and_claim_next_pending_job,
+    get_job_by_id,
     insert_document_chunks,
     update_job_status,
 )
@@ -15,66 +17,87 @@ from src.services.minio_service import download_object
 logger = logging.getLogger(__name__)
 
 
-async def process_next_job() -> dict:
+async def process_job(job_id: str) -> dict:
     """
-    Fetch, claim, and process the next pending ingestion job.
+    Core ingestion pipeline for a specific job.
+
+    Loads the ingestion job by ID, downloads the source file from MinIO,
+    parses it, splits into chunks, generates embeddings, and stores them.
+
+    Args:
+        job_id: UUID of the ingestion job to process.
 
     Returns:
-        dict: The result status dictionary.
+        dict: Result containing status, job_id, document_id, and chunks_created.
 
     Raises:
-        Exception: If processing fails.
+        ValueError: If the job is not found or the file type is unsupported.
+        Exception: On any pipeline failure — the job is marked 'failed' before re-raising.
     """
-    # 1. Fetch and claim next pending job
-    job = await get_and_claim_next_pending_job()
+    # 1. Load job from DB
+    job = await get_job_by_id(job_id)
     if not job:
-        return {"status": "no_pending_jobs"}
+        raise ValueError(f"Ingestion job '{job_id}' not found.")
 
-    job_id = job["job_id"]
     document_id = job["document_id"]
+
+    # 2. Return early if already completed (idempotent)
+    if job["status"] == "completed":
+        return {
+            "status": "already_completed",
+            "job_id": job_id,
+            "document_id": document_id,
+        }
+
+    # 3. Claim job (mark as processing)
+    await claim_job(job_id)
+
     source_bucket = job["source_bucket"]
     source_object_key = job["source_object_key"]
 
     logger.info(f"Processing job {job_id} for document {document_id}")
 
     try:
-        # 2. File type check (Only PDF)
+        # 4. MVP: PDF only
         if not source_object_key.lower().endswith(".pdf"):
             raise ValueError("Only PDF files are supported in this MVP version.")
 
-        # 3. Download the file from MinIO
-        logger.info(f"Downloading {source_object_key} from {source_bucket}")
+        # 5. Download file from MinIO
+        logger.info(f"Downloading '{source_object_key}' from bucket '{source_bucket}'")
         pdf_bytes = download_object(source_bucket, source_object_key)
 
-        # 4. Extract text from PDF
+        # 6. Extract text
         logger.info("Extracting text from PDF")
         text = extract_text_from_pdf(pdf_bytes)
         if not text or not text.strip():
-            raise ValueError("No text extracted from PDF")
+            raise ValueError(
+                "No text could be extracted from the PDF — "
+                "the file may be empty or contain only scanned images."
+            )
 
-        # 5. Split text into chunks
+        # 7. Split into chunks
         logger.info("Splitting text into chunks")
         chunks = split_text(text)
         if not chunks:
-            raise ValueError("No chunks generated from the document")
+            raise ValueError("Text was extracted but no chunks were generated.")
 
-        # 6. Generate embeddings for every chunk (using OpenAI batching)
+        # 8. Generate embeddings (batched OpenAI calls)
         logger.info(f"Generating embeddings for {len(chunks)} chunks")
         embeddings = generate_embeddings(chunks)
 
-        # 7. Map to tuples: (index, content, embedding)
+        # 9. Build (index, content, embedding) tuples
         chunks_payload = [
-            (idx, chunk_content, embedding)
-            for idx, (chunk_content, embedding) in enumerate(zip(chunks, embeddings))
+            (idx, content, embedding)
+            for idx, (content, embedding) in enumerate(zip(chunks, embeddings))
         ]
 
-        # 8. Save chunks in database (deletes old ones first)
+        # 10. Replace existing chunks and insert new ones
         logger.info("Inserting chunks into database")
         await insert_document_chunks(document_id, chunks_payload)
 
-        # 9. Mark job as completed
+        # 11. Mark job completed
         await update_job_status(job_id, "completed")
-        logger.info(f"Job {job_id} completed successfully")
+        logger.info(f"Job {job_id} completed — {len(chunks)} chunks created")
 
         return {
             "status": "completed",
@@ -84,10 +107,27 @@ async def process_next_job() -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Error processing job {job_id}: {e}")
-        # Make sure status is updated to failed
+        logger.error(f"Job {job_id} failed: {e}")
         try:
             await update_job_status(job_id, "failed", str(e))
         except Exception as db_err:
-            logger.error(f"Failed to set job {job_id} status to failed: {db_err}")
+            logger.error(f"Could not persist failed status for job {job_id}: {db_err}")
         raise
+
+
+async def process_next_job() -> dict:
+    """
+    Fetch, atomically claim, and process the next pending ingestion job.
+
+    Returns:
+        dict: Processing result, or {"status": "no_pending_jobs"} when queue is empty.
+
+    Raises:
+        Exception: Propagated from process_job on pipeline failure.
+    """
+    job = await get_and_claim_next_pending_job()
+    if not job:
+        return {"status": "no_pending_jobs"}
+
+    # Delegate to the core processing function
+    return await process_job(job["job_id"])

@@ -1,5 +1,6 @@
 """MinIO storage service."""
 
+import io
 import logging
 
 from minio import Minio
@@ -92,4 +93,37 @@ def download_object(bucket_name: str, object_key: str) -> bytes:
             response.release_conn()
     except Exception as e:
         logger.error(f"Failed to download object '{object_key}' from bucket '{bucket_name}': {e}")
+        raise
+
+
+def upload_object(
+    bucket_name: str,
+    object_key: str,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+) -> None:
+    """
+    Upload raw bytes to a MinIO bucket.
+
+    Args:
+        bucket_name: Target bucket name.
+        object_key: Destination key inside the bucket.
+        data: File content as bytes.
+        content_type: MIME type (default application/octet-stream).
+
+    Raises:
+        Exception: If upload fails.
+    """
+    try:
+        client = get_minio_client()
+        client.put_object(
+            bucket_name,
+            object_key,
+            io.BytesIO(data),
+            length=len(data),
+            content_type=content_type,
+        )
+        logger.info(f"Uploaded '{object_key}' ({len(data)} bytes) to bucket '{bucket_name}'")
+    except Exception as e:
+        logger.error(f"Failed to upload '{object_key}' to bucket '{bucket_name}': {e}")
         raise

@@ -89,7 +89,28 @@ pip install -r requirements.txt
 uvicorn src.main:app --reload --port 8000
 ```
 
+## Internal Admin UI
+
+The API ships with a built-in admin interface — no curl commands required.
+
+```
+GET http://localhost:8000/ui
+```
+
+Features:
+- **Upload Document** — select a PDF, fill metadata, click submit. The file is uploaded
+  to MinIO, database rows are created, and (by default) the full ingestion pipeline runs
+  immediately: download → parse → chunk → embed.
+- **Semantic Search** — type a natural-language query, get back matching chunks with
+  similarity scores.
+
+> The UI calls the same REST API endpoints described below.
+
+---
+
 ## Manual Ingestion Flow (MVP)
+
+> **Tip:** The Admin UI (`GET /ui`) automates steps 1–3 in a single form submission.
 
 To manually ingest and process a document in the current MVP version:
 
@@ -170,9 +191,15 @@ To manually ingest and process a document in the current MVP version:
 ```
 
 ### Document Ingestion & Search
-- **POST** `/api/v1/documents/ingest` - Registers metadata and schedules a pending job.
-- **POST** `/api/v1/ingestion/process-next` - Claims and runs the next pending job.
-- **POST** `/api/v1/documents/search` - Searches chunks semantically using pgvector.
+- **POST** `/api/v1/documents/upload` - Upload a PDF (`multipart/form-data`) and optionally
+  process it immediately (parse → chunk → embed). Returns `chunks_created` when done.
+- **POST** `/api/v1/documents/ingest` - Register metadata for a file already in MinIO and
+  schedule a pending ingestion job.
+- **POST** `/api/v1/ingestion/process-next` - Claim and run the next pending job.
+- **POST** `/api/v1/documents/search` - Semantic search using pgvector cosine similarity.
+
+### Admin UI
+- **GET** `/ui` - Internal admin interface for uploading documents and running searches.
 
 ## Configuration
 

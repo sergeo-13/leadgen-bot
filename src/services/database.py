@@ -165,6 +165,74 @@ async def get_and_claim_next_pending_job() -> Optional[dict]:
         await conn.close()
 
 
+async def get_job_by_id(job_id: str) -> Optional[dict]:
+    """
+    Fetch a single ingestion job row by its UUID.
+
+    Args:
+        job_id: UUID of the ingestion job.
+
+    Returns:
+        dict | None: Job details, or None if not found.
+    """
+    conn = await asyncpg.connect(
+        host=settings.POSTGRES_HOST,
+        port=settings.POSTGRES_PORT,
+        database=settings.POSTGRES_DB,
+        user=settings.POSTGRES_USER,
+        password=settings.POSTGRES_PASSWORD,
+        timeout=5,
+    )
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT id, document_id, source_bucket, source_object_key, status
+            FROM ingestion_jobs
+            WHERE id = $1::uuid
+            """,
+            job_id,
+        )
+        if not row:
+            return None
+        return {
+            "job_id": str(row["id"]),
+            "document_id": str(row["document_id"]),
+            "source_bucket": row["source_bucket"],
+            "source_object_key": row["source_object_key"],
+            "status": row["status"],
+        }
+    finally:
+        await conn.close()
+
+
+async def claim_job(job_id: str) -> None:
+    """
+    Set an ingestion job's status to 'processing'.
+
+    Args:
+        job_id: UUID of the ingestion job.
+    """
+    conn = await asyncpg.connect(
+        host=settings.POSTGRES_HOST,
+        port=settings.POSTGRES_PORT,
+        database=settings.POSTGRES_DB,
+        user=settings.POSTGRES_USER,
+        password=settings.POSTGRES_PASSWORD,
+        timeout=5,
+    )
+    try:
+        await conn.execute(
+            """
+            UPDATE ingestion_jobs
+            SET status = 'processing', updated_at = NOW()
+            WHERE id = $1::uuid
+            """,
+            job_id,
+        )
+    finally:
+        await conn.close()
+
+
 async def update_job_status(job_id: str, status: str, error: str = None) -> None:
     """
     Update the status and optional error message of an ingestion job.
