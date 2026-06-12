@@ -43,17 +43,23 @@ def test_api_process_next_exception(client):
 @pytest.mark.asyncio
 async def test_service_process_next_success():
     """Test core ingestion service successful run."""
+    # get_and_claim_next_pending_job only needs job_id for delegation
+    claim_mock = {"job_id": "job-uuid-1"}
+
+    # get_job_by_id returns the full job details
     job_mock = {
         "job_id": "job-uuid-1",
         "document_id": "doc-uuid-1",
         "source_bucket": "leadgen-docs",
         "source_object_key": "proposal.pdf",
-        "status": "processing"
+        "status": "pending",
     }
 
     from src.services.ingestion_service import process_next_job
 
     with patch("src.services.ingestion_service.get_and_claim_next_pending_job", new_callable=AsyncMock) as mock_claim, \
+         patch("src.services.ingestion_service.get_job_by_id", new_callable=AsyncMock) as mock_get_job, \
+         patch("src.services.ingestion_service.claim_job", new_callable=AsyncMock) as mock_claim_job, \
          patch("src.services.ingestion_service.download_object") as mock_download, \
          patch("src.services.ingestion_service.extract_text_from_pdf") as mock_parse, \
          patch("src.services.ingestion_service.split_text") as mock_chunk, \
@@ -61,8 +67,8 @@ async def test_service_process_next_success():
          patch("src.services.ingestion_service.insert_document_chunks", new_callable=AsyncMock) as mock_insert, \
          patch("src.services.ingestion_service.update_job_status", new_callable=AsyncMock) as mock_update:
 
-        # Set return values
-        mock_claim.return_value = job_mock
+        mock_claim.return_value = claim_mock
+        mock_get_job.return_value = job_mock
         mock_download.return_value = b"%PDF-1.4 mock content"
         mock_parse.return_value = "This is document content."
         mock_chunk.return_value = ["This is document content."]
@@ -78,6 +84,8 @@ async def test_service_process_next_success():
         }
 
         mock_claim.assert_called_once()
+        mock_get_job.assert_called_once_with("job-uuid-1")
+        mock_claim_job.assert_called_once_with("job-uuid-1")
         mock_download.assert_called_once_with("leadgen-docs", "proposal.pdf")
         mock_parse.assert_called_once_with(b"%PDF-1.4 mock content")
         mock_chunk.assert_called_once_with("This is document content.")
@@ -89,23 +97,30 @@ async def test_service_process_next_success():
 @pytest.mark.asyncio
 async def test_service_process_next_invalid_file_type():
     """Test core ingestion service file type verification failure."""
+    claim_mock = {"job_id": "job-uuid-2"}
+
     job_mock = {
         "job_id": "job-uuid-2",
         "document_id": "doc-uuid-2",
         "source_bucket": "leadgen-docs",
         "source_object_key": "not_a_pdf.txt",
-        "status": "processing"
+        "status": "pending",
     }
 
     from src.services.ingestion_service import process_next_job
 
     with patch("src.services.ingestion_service.get_and_claim_next_pending_job", new_callable=AsyncMock) as mock_claim, \
+         patch("src.services.ingestion_service.get_job_by_id", new_callable=AsyncMock) as mock_get_job, \
+         patch("src.services.ingestion_service.claim_job", new_callable=AsyncMock), \
          patch("src.services.ingestion_service.update_job_status", new_callable=AsyncMock) as mock_update:
 
-        mock_claim.return_value = job_mock
+        mock_claim.return_value = claim_mock
+        mock_get_job.return_value = job_mock
 
         with pytest.raises(ValueError) as exc:
             await process_next_job()
 
         assert "Only PDF files are supported" in str(exc.value)
-        mock_update.assert_called_once_with("job-uuid-2", "failed", "Only PDF files are supported in this MVP version.")
+        mock_update.assert_called_once_with(
+            "job-uuid-2", "failed", "Only PDF files are supported in this MVP version."
+        )
