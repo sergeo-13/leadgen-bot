@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class HealthResponse(BaseModel):
@@ -12,14 +12,15 @@ class HealthResponse(BaseModel):
     postgres: bool = Field(..., description="PostgreSQL connection status")
     minio: bool = Field(..., description="MinIO connection status")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "status": "ok",
                 "postgres": True,
                 "minio": True,
             }
         }
+    )
 
 
 class LeadBase(BaseModel):
@@ -43,8 +44,7 @@ class Lead(LeadBase):
     id: int = Field(..., description="Lead ID")
     created_at: str = Field(..., description="Creation timestamp")
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentMetadata(BaseModel):

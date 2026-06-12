@@ -3,7 +3,7 @@
 import os
 from typing import Optional
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -40,9 +40,10 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = os.getenv("MINIO_BUCKET", "leadgen-docs")
     MINIO_SECURE: bool = os.getenv("MINIO_SECURE", "false").lower() == "true"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+    )
 
 
 settings = Settings()
